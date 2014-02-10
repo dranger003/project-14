@@ -159,33 +159,78 @@ int main(int argc, char *argv[])
             assert(res == 0);
 
             if (pkt.stream_index == st_aud_idx) {
-                res = avcodec_decode_audio4(ic->streams[st_aud_idx]->codec, frame, &got_frame, &pkt);
-                assert(res >= 0);
+                int size, nb_plane;
+                uint16_t *out;
 
-                int plane_size;
-                av_samples_get_buffer_size(&plane_size,
-                                           ic->streams[st_aud_idx]->codec->channels,
-                                           frame->nb_samples,
-                                           ic->streams[st_aud_idx]->codec->sample_fmt,
-                                           1);
+                while (pkt.size > 0) {
+                    size = avcodec_decode_audio4(ic->streams[st_aud_idx]->codec, frame, &got_frame, &pkt);
+                    assert(size >= 0);
 
-                uint16_t *out = (uint16_t *)samples;
+                    // Avoid decoder packet over-read
+                    size = FFMIN(size, pkt.size);
 
-                if (got_frame) {
-                    assert(ic->streams[st_aud_idx]->codec->sample_fmt == AV_SAMPLE_FMT_FLTP);
+                    av_samples_get_buffer_size(&nb_plane,
+                                               ic->streams[st_aud_idx]->codec->channels,
+                                               frame->nb_samples,
+                                               ic->streams[st_aud_idx]->codec->sample_fmt,
+                                               1);
 
-                    int p = 0, nb, ch;
-                    for (nb = 0; nb < plane_size / sizeof(float); nb++) {
-                        for (ch = 0; ch < ic->streams[st_aud_idx]->codec->channels; ch++) {
-                            out[p] = ((float *)frame->extended_data[ch])[nb] * SHRT_MAX ;
-                            p++;
-                        }
+                    if (got_frame) {
+//                        switch (sfmt) {
+//                            case AV_SAMPLE_FMT_S16P:
+//                                for (int nb=0;nb<plane_size/sizeof(uint16_t);nb++){
+//                                    for (int ch = 0; ch < ctx->channels; ch++) {
+//                                        out[write_p] = ((uint16_t *) frame->extended_data[ch])[nb];
+//                                        write_p++;
+//                                    }
+//                                }
+//                                ao_play(adevice, (char*)samples, (plane_size) * ctx->channels  );
+//                                break;
+//                            case AV_SAMPLE_FMT_S16:
+//                                ao_play(adevice, (char*)frame->extended_data[0],frame->linesize[0] );
+//                                break;
+//                            case AV_SAMPLE_FMT_FLT:
+//                                for (int nb=0;nb<plane_size/sizeof(float);nb++){
+//                                    out[nb] = static_cast<short> ( ((float *) frame->extended_data[0])[nb] * std::numeric_limits<short>::max() );
+//                                }
+//                                ao_play(adevice, (char*)samples, ( plane_size/sizeof(float) )  * sizeof(uint16_t) );
+//                                break;
+//                            case AV_SAMPLE_FMT_U8P:
+//                                for (int nb=0;nb<plane_size/sizeof(uint8_t);nb++){
+//                                    for (int ch = 0; ch < ctx->channels; ch++) {
+//                                        out[write_p] = ( ((uint8_t *) frame->extended_data[0])[nb] - 127) * std::numeric_limits<short>::max() / 127 ;
+//                                        write_p++;
+//                                    }
+//                                }
+//                                ao_play(adevice, (char*)samples, ( plane_size/sizeof(uint8_t) )  * sizeof(uint16_t) * ctx->channels );
+//                                break;
+//                            case AV_SAMPLE_FMT_U8:
+//                                for (int nb=0;nb<plane_size/sizeof(uint8_t);nb++){
+//                                    out[nb] = static_cast<short> ( ( ((uint8_t *) frame->extended_data[0])[nb] - 127) * std::numeric_limits<short>::max() / 127 );
+//                                }
+//                                ao_play(adevice, (char*)samples, ( plane_size/sizeof(uint8_t) )  * sizeof(uint16_t) );
+//                                break;
+//                            default:
+//                                DBG("PCM type not supported");
+//                        }
+
+                        assert(ic->streams[st_aud_idx]->codec->sample_fmt == AV_SAMPLE_FMT_FLTP);
+
+                        int p = 0, i, j;
+                        out = (uint16_t *)samples;
+                        for (i = 0; i < nb_plane / sizeof(float); i++)
+                            for (j = 0; j < ic->streams[st_aud_idx]->codec->channels; j++)
+                                out[p++] = ((float *)frame->extended_data[j])[i] * SHRT_MAX;
+
+                        ao_play(device,
+                                (char *)samples,
+                                (uint_32)((nb_plane / sizeof(float)) * sizeof(uint16_t) * ic->streams[st_aud_idx]->codec->channels));
+
                     }
 
-                    ao_play(device,
-                            (char *)samples,
-                            (plane_size / sizeof(float)) * sizeof(uint16_t) * ic->streams[st_aud_idx]->codec->channels);
-               }
+                    pkt.size -= size;
+                    pkt.data += size;
+                }
             }
 
 //            if (pkt.stream_index == st_vid_idx) {
