@@ -5,7 +5,9 @@
 
 #include <libavformat/avformat.h>
 #include <libavdevice/avdevice.h>
+#include <libswresample/swresample.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/opt.h>
 
 #include <ao/ao.h>
 
@@ -33,60 +35,60 @@ int main(int argc, char *argv[])
         avformat_network_init();
         avdevice_register_all();
 
-        AVFormatContext *ic = NULL;
+        AVFormatContext *fc = NULL;
         AVDictionary *opts = NULL;
         av_dict_set(&opts, "seekable", "1", 0);
-        int res = avformat_open_input(&ic, argv[1], NULL, &opts);
+        int res = avformat_open_input(&fc, argv[1], NULL, &opts);
         assert(res == 0);
         av_dict_free(&opts);
         opts = NULL;
 
         int st_vid_idx = 0;
         AVCodec *vid_decoder = NULL;
-        st_vid_idx = av_find_best_stream(ic, AVMEDIA_TYPE_VIDEO, -1, -1, &vid_decoder, 0);
+        st_vid_idx = av_find_best_stream(fc, AVMEDIA_TYPE_VIDEO, -1, -1, &vid_decoder, 0);
         assert(st_vid_idx >= 0);
         assert(vid_decoder);
 
         int st_aud_idx = 0;
         AVCodec *aud_decoder = NULL;
-        st_aud_idx = av_find_best_stream(ic, AVMEDIA_TYPE_AUDIO, -1, -1, &aud_decoder, 0);
+        st_aud_idx = av_find_best_stream(fc, AVMEDIA_TYPE_AUDIO, -1, -1, &aud_decoder, 0);
         assert(st_aud_idx >= 0);
         assert (aud_decoder);
 
-//        AVRational aspect_ratio = av_guess_sample_aspect_ratio(ic, ic->streams[st_vid_idx], NULL);
+//        AVRational aspect_ratio = av_guess_sample_aspect_ratio(fc, fc->streams[st_vid_idx], NULL);
 //        printf("aspect_ratio = %d/%d\n", aspect_ratio.num, aspect_ratio.den);
 
-//        av_dump_format(ic, 0, "", 0);
+//        av_dump_format(fc, 0, "", 0);
 
         opts = NULL;
         av_dict_set(&opts, "refcounted_frames", "1", 0);
-        res = avcodec_open2(ic->streams[st_vid_idx]->codec, vid_decoder, &opts);
+        res = avcodec_open2(fc->streams[st_vid_idx]->codec, vid_decoder, &opts);
         assert(res >=0);
-        res = avcodec_open2(ic->streams[st_aud_idx]->codec, aud_decoder, &opts);
+        res = avcodec_open2(fc->streams[st_aud_idx]->codec, aud_decoder, &opts);
         assert(res >=0);
         av_dict_free(&opts);
 
-        AVRational time_base = ic->streams[st_vid_idx]->time_base;
-        AVRational frame_rate = av_guess_frame_rate(ic, ic->streams[st_vid_idx], 0);
+        AVRational time_base = fc->streams[st_vid_idx]->time_base;
+        AVRational frame_rate = av_guess_frame_rate(fc, fc->streams[st_vid_idx], 0);
         printf("%d/%d\n", time_base.num, time_base.den);
         printf("%d/%d\n", frame_rate.num, frame_rate.den);
 
 //        {
-//            res = avformat_seek_file(ic,
+//            res = avformat_seek_file(fc,
 //                                     st_vid_idx,
 //                                     INT64_MIN,
-//                                     atoi(argv[2]),//av_rescale(atoi(argv[2]), ic->streams[st_vid_idx]->time_base.den, ic->streams[st_vid_idx]->time_base.num),
+//                                     atoi(argv[2]),//av_rescale(atoi(argv[2]), fc->streams[st_vid_idx]->time_base.den, fc->streams[st_vid_idx]->time_base.num),
 //                                     INT64_MAX,
 //                                     AVSEEK_FLAG_ANY);
 //            assert(res >= 0);
-//            avcodec_flush_buffers(ic->streams[st_vid_idx]->codec);
+//            avcodec_flush_buffers(fc->streams[st_vid_idx]->codec);
 //        }
 
-//        AVFormatContext *oc = NULL;
-//        res = avformat_alloc_output_context2(&oc, NULL, "alsa", "default");
+//        AVFormatContext *ofc = NULL;
+//        res = avformat_alloc_output_context2(&ofc, NULL, "alsa", "default");
 //        assert(res >= 0);
 
-//        AVStream *os = avformat_new_stream(oc, 0);
+//        AVStream *os = avformat_new_stream(ofc, 0);
 //        os->codec->codec_type = AVMEDIA_TYPE_AUDIO;
 //        os->codec->codec_id = CODEC_ID_PCM_S16LE;
 //        os->codec->sample_rate = 48000;
@@ -94,56 +96,21 @@ int main(int argc, char *argv[])
 //        os->codec->time_base.num = 1;
 //        os->codec->time_base.den = os->codec->sample_rate;
 
-//        res = avformat_write_header(oc, NULL);
+//        res = avformat_write_header(ofc, NULL);
 //        assert(res >= 0);
+
+//        AVPacket opkt = { 0 };
 
         AVPacket pkt = { 0 };
         AVFrame *frame = av_frame_alloc();
         int got_frame = 0;
 
-//        AVPacket opkt = { 0 };
-//        av_init_packet(&opkt);
-
-//        const unsigned int rate = 48000;
-//        const unsigned int chunk = 960;
-//        unsigned int old = -1, cur;
-//        int64_t dts, wall;
-//        unsigned int i, j, k;
-//        const unsigned int period[2] = { 60, 30 };
-
-//        int16_t *buf[2];
-//        buf[0] = av_malloc(rate * 2 * sizeof(int16_t) * 2);
-//        buf[1] = buf[0] + rate * 2;
-//        memset(buf[0], 0, rate * 2 * sizeof(int16_t) * 2);
-//        for (i = 0; i < 2; i++)
-//            for (j = 0; j < rate; j++)
-//                buf[i][j * 2 + i] = 10000 * sin(2 * M_PI * j / period[i]);
-
-//        i = j = 0;
-//        for (k = 0; k < 50 * 2 * 3; k++) {
-//            opkt.data = (void *)(buf[i] + j * 2);
-//            opkt.size = chunk * 2 * sizeof(int16_t);
-//            av_write_frame(oc, &opkt);
-//            opkt.pts = opkt.dts += chunk;
-//            j += chunk;
-//            if (j == rate) {
-//                j = 0;
-//                i = 1 - i;
-//            }
-//            av_get_output_timestamp(oc, 0, &dts, &wall);
-//            cur = (dts / rate) & 1;
-//            if (old != cur) {
-//                old = cur;
-//                printf(cur == 0 ? "<--     \n" : "     -->\n");
-//            }
-//        }
-
         ao_initialize();
 
         ao_sample_format sample_fmt = { 0 };
         sample_fmt.bits = 16;
-        sample_fmt.channels = ic->streams[st_aud_idx]->codec->channels;
-        sample_fmt.rate = ic->streams[st_aud_idx]->codec->sample_rate;
+        sample_fmt.channels = fc->streams[st_aud_idx]->codec->channels;
+        sample_fmt.rate = fc->streams[st_aud_idx]->codec->sample_rate;
         sample_fmt.byte_format = AO_FMT_NATIVE;
 
         int driver = ao_default_driver_id();
@@ -151,31 +118,62 @@ int main(int argc, char *argv[])
 
         // AVCODEC_MAX_AUDIO_FRAME_SIZE + FF_INPUT_BUFFER_PADDING_SIZE;
         uint8_t samples[192000 + 16];
+        uint8_t *buf = samples;
+
+        SwrContext *swr_ctx = swr_alloc();
+        av_opt_set_int(swr_ctx, "in_channel_layout", fc->streams[st_aud_idx]->codec->channel_layout, 0);
+        av_opt_set_int(swr_ctx, "out_channel_layout", fc->streams[st_aud_idx]->codec->channel_layout, 0);
+        av_opt_set_int(swr_ctx, "in_channel_count", fc->streams[st_aud_idx]->codec->channels, 0);
+        av_opt_set_int(swr_ctx, "out_channel_count", fc->streams[st_aud_idx]->codec->channels, 0);
+        av_opt_set_int(swr_ctx, "in_sample_rate", fc->streams[st_aud_idx]->codec->sample_rate, 0);
+        av_opt_set_int(swr_ctx, "out_sample_rate", fc->streams[st_aud_idx]->codec->sample_rate, 0);
+        av_opt_set_sample_fmt(swr_ctx, "in_sample_fmt",  AV_SAMPLE_FMT_FLTP, 0);
+        av_opt_set_sample_fmt(swr_ctx, "out_sample_fmt", AV_SAMPLE_FMT_S16,  0);
+        res = swr_init(swr_ctx);
+        assert(res >= 0);
 
         while (!quit) {
             av_free_packet(&pkt);
 
-            res = av_read_frame(ic, &pkt);
+            res = av_read_frame(fc, &pkt);
             assert(res == 0);
 
             if (pkt.stream_index == st_aud_idx) {
-                int size, nb_plane;
-                uint16_t *out;
+                int size;//, i = 0, j, k;
 
                 while (pkt.size > 0) {
-                    size = avcodec_decode_audio4(ic->streams[st_aud_idx]->codec, frame, &got_frame, &pkt);
+                    size = avcodec_decode_audio4(fc->streams[st_aud_idx]->codec, frame, &got_frame, &pkt);
                     assert(size >= 0);
 
                     // Avoid decoder packet over-read
                     size = FFMIN(size, pkt.size);
 
-                    av_samples_get_buffer_size(&nb_plane,
-                                               ic->streams[st_aud_idx]->codec->channels,
-                                               frame->nb_samples,
-                                               ic->streams[st_aud_idx]->codec->sample_fmt,
-                                               1);
-
                     if (got_frame) {
+                        assert(fc->streams[st_aud_idx]->codec->sample_fmt == AV_SAMPLE_FMT_FLTP);
+
+//                        for (j = 0; j < frame->nb_samples; j++)
+//                            for (k = 0; k < fc->streams[st_aud_idx]->codec->channels; k++)
+//                                ((uint16_t *)samples)[i++] = ((float *)frame->extended_data[k])[j] * SHRT_MAX;
+
+                        res = swr_convert(swr_ctx,
+                                          &buf,
+                                          frame->nb_samples,
+                                          (const uint8_t **)frame->extended_data,
+                                          frame->nb_samples);
+                        assert(res >= 0);
+
+//                        opkt.size = frame->nb_samples * fc->streams[st_aud_idx]->codec->channels * sizeof(uint16_t);
+//                        opkt.data = samples;
+//                        opkt.dts = opkt.pts = pkt.pts;
+//                        opkt.duration = pkt.duration;
+
+//                        res = av_write_frame(ofc, &opkt);
+//                        assert(res >= 0);
+
+                        ao_play(device,
+                                (char *)samples,
+                                (uint_32)(frame->nb_samples * fc->streams[st_aud_idx]->codec->channels * sizeof(uint16_t)));
+
 //                        switch (sfmt) {
 //                            case AV_SAMPLE_FMT_S16P:
 //                                for (int nb=0;nb<plane_size/sizeof(uint16_t);nb++){
@@ -214,18 +212,6 @@ int main(int argc, char *argv[])
 //                                DBG("PCM type not supported");
 //                        }
 
-                        assert(ic->streams[st_aud_idx]->codec->sample_fmt == AV_SAMPLE_FMT_FLTP);
-
-                        int p = 0, i, j;
-                        out = (uint16_t *)samples;
-                        for (i = 0; i < nb_plane / sizeof(float); i++)
-                            for (j = 0; j < ic->streams[st_aud_idx]->codec->channels; j++)
-                                out[p++] = ((float *)frame->extended_data[j])[i] * SHRT_MAX;
-
-                        ao_play(device,
-                                (char *)samples,
-                                (uint_32)((nb_plane / sizeof(float)) * sizeof(uint16_t) * ic->streams[st_aud_idx]->codec->channels));
-
                     }
 
                     pkt.size -= size;
@@ -234,11 +220,11 @@ int main(int argc, char *argv[])
             }
 
 //            if (pkt.stream_index == st_vid_idx) {
-//                res = avcodec_decode_video2(ic->streams[st_vid_idx]->codec, frame, &got_frame, &pkt);
+//                res = avcodec_decode_video2(fc->streams[st_vid_idx]->codec, frame, &got_frame, &pkt);
 //                assert(res >= 0);
 
 //                if (got_frame) {
-//                    assert(ic->streams[st_vid_idx]->codec->pix_fmt == AV_PIX_FMT_YUV420P);
+//                    assert(fc->streams[st_vid_idx]->codec->pix_fmt == AV_PIX_FMT_YUV420P);
 
 //                    double duration = (frame_rate.num && frame_rate.den ? av_q2d((AVRational){ frame_rate.den, frame_rate.num }) : 0);
 //                    frame->pts = av_frame_get_best_effort_timestamp(frame);
@@ -265,9 +251,9 @@ int main(int argc, char *argv[])
 
 //                        res = av_image_alloc(video_dst_data,
 //                                             video_dst_linesize,
-//                                             ic->streams[st_vid_idx]->codec->width,
-//                                             ic->streams[st_vid_idx]->codec->height,
-//                                             ic->streams[st_vid_idx]->codec->pix_fmt,
+//                                             fc->streams[st_vid_idx]->codec->width,
+//                                             fc->streams[st_vid_idx]->codec->height,
+//                                             fc->streams[st_vid_idx]->codec->pix_fmt,
 //                                             1);
 //                        assert(res >= 0);
 //                        video_dst_bufsize = res;
@@ -277,9 +263,9 @@ int main(int argc, char *argv[])
 //                                      video_dst_linesize,
 //                                      (const uint8_t **)(frame->data),
 //                                      frame->linesize,
-//                                      ic->streams[st_vid_idx]->codec->pix_fmt,
-//                                      ic->streams[st_vid_idx]->codec->width,
-//                                      ic->streams[st_vid_idx]->codec->height);
+//                                      fc->streams[st_vid_idx]->codec->pix_fmt,
+//                                      fc->streams[st_vid_idx]->codec->width,
+//                                      fc->streams[st_vid_idx]->codec->height);
 
 //                        FILE *f = fopen("frame.yuv", "wb");
 //                        assert(f);
@@ -292,14 +278,14 @@ int main(int argc, char *argv[])
 //            }
         }
 
-//        av_write_trailer(oc);
+//        av_write_trailer(ofc);
 
         ao_shutdown();
 
         av_free_packet(&pkt);
         av_frame_free(&frame);
 
-        avformat_close_input(&ic);
+        avformat_close_input(&fc);
 
         avformat_network_deinit();
     }
