@@ -43,17 +43,23 @@ int main(int argc, char *argv[])
         av_dict_free(&opts);
         opts = NULL;
 
+        int i;
+        for (i = 0; i < fc->nb_streams; i++)
+            fc->streams[i]->discard = AVDISCARD_ALL;
+
         int st_vid_idx = 0;
         AVCodec *vid_decoder = NULL;
         st_vid_idx = av_find_best_stream(fc, AVMEDIA_TYPE_VIDEO, -1, -1, &vid_decoder, 0);
         assert(st_vid_idx >= 0);
         assert(vid_decoder);
+        fc->streams[st_vid_idx]->discard = AVDISCARD_DEFAULT;
 
         int st_aud_idx = 0;
         AVCodec *aud_decoder = NULL;
         st_aud_idx = av_find_best_stream(fc, AVMEDIA_TYPE_AUDIO, -1, -1, &aud_decoder, 0);
         assert(st_aud_idx >= 0);
         assert (aud_decoder);
+        fc->streams[st_aud_idx]->discard = AVDISCARD_DEFAULT;
 
 //        AVRational aspect_ratio = av_guess_sample_aspect_ratio(fc, fc->streams[st_vid_idx], NULL);
 //        printf("aspect_ratio = %d/%d\n", aspect_ratio.num, aspect_ratio.den);
@@ -70,16 +76,17 @@ int main(int argc, char *argv[])
 
         AVRational time_base = fc->streams[st_vid_idx]->time_base;
         AVRational frame_rate = av_guess_frame_rate(fc, fc->streams[st_vid_idx], 0);
+        printf("AV_TIME_BASE = %d\n", AV_TIME_BASE);
         printf("%d/%d\n", time_base.num, time_base.den);
         printf("%d/%d\n", frame_rate.num, frame_rate.den);
 
         {
             res = avformat_seek_file(fc,
-                                     st_aud_idx,
+                                     -1,
                                      INT64_MIN,
-                                     atoi(argv[2]) / (long double)time_base.den,//av_rescale(atoi(argv[2]), fc->streams[st_vid_idx]->time_base.den, fc->streams[st_vid_idx]->time_base.num),
+                                     atoi(argv[2]) * AV_TIME_BASE,
                                      INT64_MAX,
-                                     0);
+                                     AVSEEK_FLAG_ANY);
             assert(res >= 0);
             avcodec_flush_buffers(fc->streams[st_vid_idx]->codec);
         }
@@ -104,6 +111,9 @@ int main(int argc, char *argv[])
         struct timespec a, b;
         clock_gettime(CLOCK_MONOTONIC, &a);
 
+        uint8_t *out_buf = NULL;
+        int out_buf_size = 0;
+
         while (!quit) {
             av_free_packet(&pkt);
 
@@ -116,18 +126,23 @@ int main(int argc, char *argv[])
                 while (pkt.size > 0) {
                     size = avcodec_decode_audio4(fc->streams[st_aud_idx]->codec, frame, &got_frame, &pkt);
 
+                    // Skip errors
+                    if (size < 0)
+                    {
+                        pkt.size = 0;
+                        continue;
+                    }
+
                     // Avoid decoder packet over-read
                     size = FFMIN(size, pkt.size);
 
                     if (size > 0 && got_frame) {
-                        assert(fc->streams[st_aud_idx]->codec->sample_fmt == AV_SAMPLE_FMT_FLTP);
-
-                        int in_linesize;
-                        int in_size = av_samples_get_buffer_size(&in_linesize,
-                                                                 fc->streams[st_aud_idx]->codec->channels,
-                                                                 frame->nb_samples,
-                                                                 fc->streams[st_aud_idx]->codec->sample_fmt,
-                                                                 0);
+//                        int in_linesize;
+//                        int in_size = av_samples_get_buffer_size(&in_linesize,
+//                                                                 fc->streams[st_aud_idx]->codec->channels,
+//                                                                 frame->nb_samples,
+//                                                                 fc->streams[st_aud_idx]->codec->sample_fmt,
+//                                                                 0);
                         int out_linesize;
                         int out_size = av_samples_get_buffer_size(&out_linesize,
                                                                   fc->streams[st_aud_idx]->codec->channels,
@@ -135,57 +150,66 @@ int main(int argc, char *argv[])
                                                                   AV_SAMPLE_FMT_S16,
                                                                   1);
 
-                        int contiguous =
-                                !frame->data[1] ||
-                                (frame->data[1] == frame->data[0] + in_linesize && in_linesize == out_linesize && in_linesize * fc->streams[st_aud_idx]->codec->channels == in_size);
+//                        int contiguous =
+//                                !frame->data[1] ||
+//                                (frame->data[1] == frame->data[0] + in_linesize && in_linesize == out_linesize && in_linesize * fc->streams[st_aud_idx]->codec->channels == in_size);
 
-                        uint8_t *out_buf = av_malloc(out_size + FF_INPUT_BUFFER_PADDING_SIZE);
+                        if (!out_buf || out_buf_size < out_size + FF_INPUT_BUFFER_PADDING_SIZE)
+                        {
+                            if (out_buf)
+                                av_free(out_buf);
 
-                        SwrContext *swr = swr_alloc_set_opts(NULL,
-                                                             av_get_default_channel_layout(fc->streams[st_aud_idx]->codec->channels),
-                                                             AV_SAMPLE_FMT_S16,
-                                                             fc->streams[st_aud_idx]->codec->sample_rate,
-                                                             av_get_default_channel_layout(fc->streams[st_aud_idx]->codec->channels),
-                                                             fc->streams[st_aud_idx]->codec->sample_fmt,
-                                                             fc->streams[st_aud_idx]->codec->sample_rate,
-                                                             0,
-                                                             NULL);
-                        res = swr_init(swr);
-                        assert(res >= 0);
+                            out_buf = av_malloc(out_size + FF_INPUT_BUFFER_PADDING_SIZE);
+                            assert(out_buf);
+                        }
 
-                        uint8_t *out_planes[fc->streams[st_aud_idx]->codec->channels];
-                        res = av_samples_fill_arrays(out_planes,
-                                                     NULL,
-                                                     (const uint8_t *)out_buf,
-                                                     fc->streams[st_aud_idx]->codec->channels,
-                                                     frame->nb_samples,
-                                                     AV_SAMPLE_FMT_S16,
-                                                     1);
-                        assert(res >= 0);
+                        {
+                            SwrContext *swr = swr_alloc_set_opts(NULL,
+                                                                 av_get_default_channel_layout(fc->streams[st_aud_idx]->codec->channels),
+                                                                 AV_SAMPLE_FMT_S16,
+                                                                 fc->streams[st_aud_idx]->codec->sample_rate,
+                                                                 av_get_default_channel_layout(fc->streams[st_aud_idx]->codec->channels),
+                                                                 fc->streams[st_aud_idx]->codec->sample_fmt,
+                                                                 fc->streams[st_aud_idx]->codec->sample_rate,
+                                                                 0,
+                                                                 NULL);
+                            res = swr_init(swr);
+                            assert(res >= 0);
 
-                        res = swr_convert(swr,
-                                          out_planes,
-                                          frame->nb_samples,
-                                          (const uint8_t **)frame->data,
-                                          frame->nb_samples);
-                        assert(res >= 0);
+                            uint8_t *out_planes[fc->streams[st_aud_idx]->codec->channels];
+                            res = av_samples_fill_arrays(out_planes,
+                                                         NULL,
+                                                         (const uint8_t *)out_buf,
+                                                         fc->streams[st_aud_idx]->codec->channels,
+                                                         frame->nb_samples,
+                                                         AV_SAMPLE_FMT_S16,
+                                                         1);
+                            assert(res >= 0);
+
+                            res = swr_convert(swr,
+                                              out_planes,
+                                              frame->nb_samples,
+                                              (const uint8_t **)frame->data,
+                                              frame->nb_samples);
+                            assert(res >= 0);
+                            swr_free(&swr);
+                        }
 
                         ao_play(device, (char *)out_buf, (uint_32)out_size);
 
-                        swr_free(&swr);
-                        av_free(out_buf);
+                        {
+                            long double pts = pkt.pts / (long double)1000.0;
+                            long double ela = (b.tv_sec - a.tv_sec) + ((b.tv_nsec - a.tv_nsec) / (long double)1000000000);
+                            long double dif = pts - ela;
 
-                        long double pts = pkt.pts / (long double)1000.0;
-                        long double ela = (b.tv_sec - a.tv_sec) + ((b.tv_nsec - a.tv_nsec) / (long double)1000000000);
-                        long double dif = pts - ela;
-
-                        clock_gettime(CLOCK_MONOTONIC, &b);
-                        fprintf(stdout,
-                                "PTS: %.6Lf, E: %.6Lf, D: %.6Lf                                     \r",
-                                pts,
-                                ela,
-                                dif);
-                        fflush(stdout);
+                            clock_gettime(CLOCK_MONOTONIC, &b);
+                            fprintf(stdout,
+                                    "PTS: %.6Lf, ELA: %.6Lf, DIF: %.6Lf                                     \r",
+                                    pts,
+                                    ela,
+                                    dif);
+                            fflush(stdout);
+                        }
                     }
 
                     pkt.size -= size;
