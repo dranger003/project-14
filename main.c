@@ -2,6 +2,10 @@
 #include <assert.h>
 #include <signal.h>
 #include <limits.h>
+#include <unistd.h>
+#include <pthread.h>
+
+#include <linux/input.h>
 
 #include <libavformat/avformat.h>
 #include <libavdevice/avdevice.h>
@@ -21,6 +25,12 @@ static void signal_handler(int signal)
     quit = 1;
 }
 
+//static void *thread_start(void *arg)
+//{
+//    sleep(5);
+//    return NULL;
+//}
+
 int main(int argc, char *argv[])
 {
     struct sigaction sa;
@@ -28,6 +38,33 @@ int main(int argc, char *argv[])
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_RESTART;
     assert(sigaction(SIGINT, &sa, NULL) != -1);
+    assert(sigaction(SIGTERM, &sa, NULL) != -1);
+
+    {
+        printf("%d\n", isatty(STDIN_FILENO));
+        printf("%s\n", ttyname(STDIN_FILENO));
+
+//        FILE *fd = fopen("/dev/input/event0", "rb");
+//        struct input_event ev;
+//        while (!quit) {
+//            fread(&ev, sizeof(ev), 1, fd);
+//            if (ev.type == EV_KEY && ev.value == 1) {
+//                fprintf(stdout, "c:%d,v:%d\n", ev.code, ev.value);
+//                fflush(stdout);
+//            }
+//        }
+//        fclose(fd);
+
+//        printf("\n");
+
+        return 0;
+    }
+
+//    {
+//        pthread_t thread;
+//        pthread_create(&thread, 0, &thread_start, NULL);
+//        pthread_join(thread, 0);
+//    }
 
     {
         av_register_all();
@@ -84,7 +121,7 @@ int main(int argc, char *argv[])
             res = avformat_seek_file(fc,
                                      -1,
                                      INT64_MIN,
-                                     atoi(argv[2]) * AV_TIME_BASE,
+                                     (int64_t)atoi(argv[2]) * AV_TIME_BASE,
                                      INT64_MAX,
                                      AVSEEK_FLAG_ANY);
             assert(res >= 0);
