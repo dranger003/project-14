@@ -2,6 +2,9 @@
 #include <assert.h>
 #include <signal.h>
 #include <limits.h>
+#include <termios.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 #include <libavformat/avformat.h>
 #include <libavdevice/avdevice.h>
@@ -10,6 +13,7 @@
 #include <libavutil/opt.h>
 
 #include <ao/ao.h>
+#include <dbus/dbus.h>
 
 #define UNUSED(x)           (void)(x)
 
@@ -28,6 +32,117 @@ int main(int argc, char *argv[])
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_RESTART;
     assert(sigaction(SIGINT, &sa, NULL) != -1);
+    assert(sigaction(SIGTERM, &sa, NULL) != -1);
+
+    {
+        if (strcmp(argv[1], "receive") == 0) {
+            DBusError err;
+            dbus_error_init(&err);
+
+            DBusConnection *bus = dbus_bus_get_private(DBUS_BUS_SESSION, &err);
+            assert(bus);
+
+            dbus_connection_set_exit_on_disconnect(bus, FALSE);
+
+            int res = dbus_bus_request_name(bus,
+                                            "org.formatique.sink",
+                                            DBUS_NAME_FLAG_DO_NOT_QUEUE,
+                                            &err);
+            assert(res == DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER);
+
+//            dbus_threads_init_default();
+
+            dbus_bus_add_match(bus, "type='signal',interface='org.formatique.signal.Type'", &err);
+            dbus_connection_flush(bus);
+            assert(!dbus_error_is_set(&err));
+
+            DBusMessage *msg;
+            DBusMessageIter arg;
+            char *value;
+
+            while (!quit) {
+                dbus_connection_read_write_dispatch(bus, 0);
+
+                msg = dbus_connection_pop_message(bus);
+                if (msg) {
+                    if (dbus_message_is_signal(msg, "org.formatique.signal.Type", "QUIT")) {
+                        res = dbus_message_iter_init(msg, &arg);
+                        assert(res);
+
+                        dbus_message_iter_get_arg_type(&arg);
+                        dbus_message_iter_get_basic(&arg, &value);
+
+                        fprintf(stdout, "%s\n", value);
+                        fflush(stdout);
+
+                        if (strcmp(value, "QUIT") == 0)
+                            quit = 1;
+                    }
+
+                    dbus_message_unref(msg);
+                }
+
+                usleep(1);
+            }
+
+            dbus_connection_close(bus);
+            dbus_connection_unref(bus);
+        }
+        else if (strcmp(argv[1], "send") == 0) {
+            DBusError err;
+            dbus_error_init(&err);
+
+            DBusConnection *bus = dbus_bus_get_private(DBUS_BUS_SESSION, &err);
+            assert(bus);
+
+            dbus_connection_set_exit_on_disconnect(bus, FALSE);
+
+            int res = dbus_bus_request_name(bus,
+                                            "org.formatique.source",
+                                            DBUS_NAME_FLAG_DO_NOT_QUEUE,
+                                            &err);
+            assert(res == DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER);
+
+            DBusMessage *msg = dbus_message_new_signal("/org/formatique/signal/Object",
+                                                       "org.formatique.signal.Type",
+                                                       "QUIT");
+            assert(msg);
+
+            DBusMessageIter arg;
+            dbus_message_iter_init_append(msg, &arg);
+
+            char *value = "QUIT";
+            res = dbus_message_iter_append_basic(&arg, DBUS_TYPE_STRING, &value);
+            assert(res);
+
+            res = dbus_connection_send(bus, msg, NULL);
+            assert(res);
+
+            dbus_connection_flush(bus);
+            dbus_message_unref(msg);
+        }
+
+//        struct termios o;
+//        tcgetattr(STDIN_FILENO, &o);
+//        struct termios n = o;
+//        n.c_lflag &= ~(ICANON | ECHO | ECHOCTL | ECHONL);
+//        n.c_cflag |= HUPCL;
+//        n.c_cc[VMIN] = 0;
+//        tcsetattr(STDIN_FILENO, TCSANOW, &n);
+
+//        int c;
+//        while (!quit) {
+//            c = getchar();
+//            if (c != EOF)
+//                printf("0x%02x\n", c);
+
+//            usleep(1);
+//        }
+
+//        tcsetattr(STDIN_FILENO, TCSANOW, &o);
+
+        return 0;
+    }
 
     {
         av_register_all();
@@ -47,12 +162,12 @@ int main(int argc, char *argv[])
         for (i = 0; i < fc->nb_streams; i++)
             fc->streams[i]->discard = AVDISCARD_ALL;
 
-        int st_vid_idx = 0;
-        AVCodec *vid_decoder = NULL;
-        st_vid_idx = av_find_best_stream(fc, AVMEDIA_TYPE_VIDEO, -1, -1, &vid_decoder, 0);
-        assert(st_vid_idx >= 0);
-        assert(vid_decoder);
-        fc->streams[st_vid_idx]->discard = AVDISCARD_DEFAULT;
+//        int st_vid_idx = 0;
+//        AVCodec *vid_decoder = NULL;
+//        st_vid_idx = av_find_best_stream(fc, AVMEDIA_TYPE_VIDEO, -1, -1, &vid_decoder, 0);
+//        assert(st_vid_idx >= 0);
+//        assert(vid_decoder);
+//        fc->streams[st_vid_idx]->discard = AVDISCARD_DEFAULT;
 
         int st_aud_idx = 0;
         AVCodec *aud_decoder = NULL;
@@ -66,29 +181,45 @@ int main(int argc, char *argv[])
 
 //        av_dump_format(fc, 0, "", 0);
 
-        opts = NULL;
-        av_dict_set(&opts, "refcounted_frames", "1", 0);
-        res = avcodec_open2(fc->streams[st_vid_idx]->codec, vid_decoder, &opts);
-        assert(res >=0);
-        res = avcodec_open2(fc->streams[st_aud_idx]->codec, aud_decoder, &opts);
-        assert(res >=0);
-        av_dict_free(&opts);
-
-        AVRational time_base = fc->streams[st_vid_idx]->time_base;
-        AVRational frame_rate = av_guess_frame_rate(fc, fc->streams[st_vid_idx], 0);
-        printf("AV_TIME_BASE = %d\n", AV_TIME_BASE);
-        printf("%d/%d\n", time_base.num, time_base.den);
-        printf("%d/%d\n", frame_rate.num, frame_rate.den);
-
         {
+            opts = NULL;
+            av_dict_set(&opts, "refcounted_frames", "1", 0);
+//            res = avcodec_open2(fc->streams[st_vid_idx]->codec, vid_decoder, &opts);
+//            assert(res >=0);
+            res = avcodec_open2(fc->streams[st_aud_idx]->codec, aud_decoder, &opts);
+            assert(res >=0);
+            av_dict_free(&opts);
+        }
+
+//        AVRational time_base = fc->streams[st_vid_idx]->time_base;
+//        AVRational frame_rate = av_guess_frame_rate(fc, fc->streams[st_vid_idx], 0);
+//        printf("%d/%d\n", time_base.num, time_base.den);
+//        printf("%d/%d\n", frame_rate.num, frame_rate.den);
+        printf("AV_TIME_BASE = %d\n", AV_TIME_BASE);
+
+        int time_seek = atoi(argv[2]);
+        if (time_seek > 0) {
+            for (i = 0; i < fc->nb_chapters; i++) {
+                if (av_compare_ts((int64_t)time_seek * AV_TIME_BASE,
+                              AV_TIME_BASE_Q,
+                              fc->chapters[i]->start,
+                              fc->chapters[i]->time_base) < 0) {
+                    break;
+                }
+            }
+
+            fprintf(stdout, "Seeking to %d... (chapter %d)\n", time_seek, i);
+            fflush(stdout);
             res = avformat_seek_file(fc,
                                      -1,
                                      INT64_MIN,
-                                     atoi(argv[2]) * AV_TIME_BASE,
+                                     (int64_t)time_seek * AV_TIME_BASE,
                                      INT64_MAX,
                                      AVSEEK_FLAG_ANY);
             assert(res >= 0);
-            avcodec_flush_buffers(fc->streams[st_vid_idx]->codec);
+
+//            avcodec_flush_buffers(fc->streams[st_vid_idx]->codec);
+//            avcodec_flush_buffers(fc->streams[st_aud_idx]->codec);
         }
 
         AVPacket pkt = { 0 };
@@ -124,6 +255,9 @@ int main(int argc, char *argv[])
                 int size;
 
                 while (pkt.size > 0) {
+//                    avcodec_flush_buffers(fc->streams[st_vid_idx]->codec);
+                    avcodec_flush_buffers(fc->streams[st_aud_idx]->codec);
+
                     size = avcodec_decode_audio4(fc->streams[st_aud_idx]->codec, frame, &got_frame, &pkt);
 
                     // Skip errors
@@ -214,6 +348,8 @@ int main(int argc, char *argv[])
 
                     pkt.size -= size;
                     pkt.data += size;
+
+                    av_frame_unref(frame);
                 }
             }
 
