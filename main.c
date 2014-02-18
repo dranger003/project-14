@@ -72,39 +72,62 @@ int main(int argc, char *argv[])
             dbus_connection_set_exit_on_disconnect(bus, FALSE);
 
             int res = dbus_bus_request_name(bus,
-                                            "org.formatique.sink",
+                                            "org.formatique.MediaPlayer",
                                             DBUS_NAME_FLAG_DO_NOT_QUEUE,
                                             &err);
             assert(res == DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER);
 
-//            dbus_threads_init_default();
-
-            dbus_bus_add_match(bus, "type='signal',interface='org.formatique.signal.Type'", &err);
-            dbus_connection_flush(bus);
-            assert(!dbus_error_is_set(&err));
+//            dbus_bus_add_match(bus, "type='signal',interface='org.formatique.signal.Type'", &err);
+//            dbus_connection_flush(bus);
+//            assert(!dbus_error_is_set(&err));
 
             DBusMessage *msg;
-            DBusMessageIter arg;
-            char *value;
+//            DBusMessageIter arg;
+//            char *value;
 
             while (!quit) {
                 dbus_connection_read_write_dispatch(bus, 0);
 
                 msg = dbus_connection_pop_message(bus);
                 if (msg) {
-                    if (dbus_message_is_signal(msg, "org.formatique.signal.Type", "QUIT")) {
-                        res = dbus_message_iter_init(msg, &arg);
+                    if (dbus_message_is_method_call(msg, "org.freedesktop.DBus.Introspectable", "Introspect")) {
+                        DBusMessage *reply = dbus_message_new_method_return(msg);
+                        DBusMessageIter args;
+                        dbus_message_iter_init_append(reply, &args);
+
+                        static const char *xml =
+                            DBUS_INTROSPECT_1_0_XML_DOCTYPE_DECL_NODE
+                            "<node>                                                     "
+                            "  <interface name=\"org.freedesktop.DBus.Introspectable\"> "
+                            "    <method name=\"Introspect\">                           "
+                            "      <arg direction=\"out\" type=\"s\"/>                  "
+                            "    </method>                                              "
+                            "  </interface>                                             "
+                            "</node>                                                    ";
+                        res = dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, (const void *)&xml);
                         assert(res);
 
-                        dbus_message_iter_get_arg_type(&arg);
-                        dbus_message_iter_get_basic(&arg, &value);
+                        dbus_uint32_t serial = 0;
+                        res = dbus_connection_send(bus, reply, &serial);
+                        assert(res);
 
-                        fprintf(stdout, "%s\n", value);
-                        fflush(stdout);
-
-                        if (strcmp(value, "QUIT") == 0)
-                            quit = 1;
+                        dbus_connection_flush(bus);
+                        dbus_message_unref(reply);
                     }
+
+//                    if (dbus_message_is_signal(msg, "org.formatique.signal.Type", "QUIT")) {
+//                        res = dbus_message_iter_init(msg, &arg);
+//                        assert(res);
+
+//                        dbus_message_iter_get_arg_type(&arg);
+//                        dbus_message_iter_get_basic(&arg, &value);
+
+//                        fprintf(stdout, "%s\n", value);
+//                        fflush(stdout);
+
+//                        if (strcmp(value, "QUIT") == 0)
+//                            quit = 1;
+//                    }
 
                     dbus_message_unref(msg);
                 }
