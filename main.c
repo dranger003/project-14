@@ -112,6 +112,9 @@ int main(int argc, char *argv[])
                             "    <method name=\"Ping\">									"
                             "      <arg direction=\"out\" type=\"s\" />					"
                             "    </method>												"
+                            "    <method name=\"Key\">                                  "
+                            "      <arg direction=\"in\" type=\"i\" />                  "
+                            "    </method>                                              "
                             "  </interface>												"
                             "  <interface name=\"org.freedesktop.DBus.Introspectable\"> "
                             "    <method name=\"Introspect\">                           "
@@ -143,6 +146,17 @@ int main(int argc, char *argv[])
 
                         dbus_connection_flush(bus);
                         dbus_message_unref(reply);
+                    }
+                    else if (dbus_message_is_method_call(msg, "org.formatique.MediaPlayer", "Key")) {
+                        DBusMessageIter args;
+                        dbus_message_iter_init(msg, &args);
+                        assert(dbus_message_iter_get_arg_type(&args) == DBUS_TYPE_INT32);
+                        dbus_int32_t param;
+                        dbus_message_iter_get_basic(&args, &param);
+                        printf("0x%02x\n", param);
+
+                        if (param == 0x1b) // ESC
+                            quit = 1;
                     }
 
 //                    if (dbus_message_is_signal(msg, "org.formatique.signal.Type", "QUIT")) {
@@ -179,31 +193,62 @@ int main(int argc, char *argv[])
                 assert(0);
             }
 
-            DBusMessage *msg = dbus_message_new_method_call("org.formatique.MediaPlayer",
-                                                            "/org/formatique/MediaPlayer",
-                                                            "org.formatique.MediaPlayer",
-                                                            "Ping");
+            {
+                struct termios o;
+                tcgetattr(STDIN_FILENO, &o);
+                struct termios n = o;
+                n.c_lflag &= ~(ICANON | ECHO | ECHOCTL | ECHONL);
+                n.c_cflag |= HUPCL;
+                n.c_cc[VMIN] = 0;
+                tcsetattr(STDIN_FILENO, TCSANOW, &n);
 
-            DBusMessageIter args;
-            dbus_message_iter_init_append(msg, &args);
+                int c;
+                while (!quit) {
+                    c = getchar();
+                    if (c != EOF) {
+                        DBusMessage *msg = dbus_message_new_method_call("org.formatique.MediaPlayer",
+                                                                        "/org/formatique/MediaPlayer",
+                                                                        "org.formatique.MediaPlayer",
+                                                                        "Key");
 
-            DBusPendingCall *call;
-            dbus_connection_send_with_reply(bus, msg, &call, -1);
+                        DBusMessageIter args;
+                        dbus_message_iter_init_append(msg, &args);
 
-            dbus_connection_flush(bus);
-            dbus_message_unref(msg);
+                        dbus_int32_t value = c;
+                        dbus_message_iter_append_basic(&args, DBUS_TYPE_INT32, &value);
 
-            dbus_pending_call_block(call);
-            dbus_pending_call_steal_reply(call);
-            dbus_pending_call_unref(call);
+                        dbus_uint32_t serial;
+                        dbus_connection_send(bus, msg, &serial);
+                        dbus_message_unref(msg);
 
-            dbus_message_iter_init(msg, &args);
+                        printf("0x%02x\n", c);
 
-            char *value;
-            dbus_message_iter_get_basic(&args, &value);
-            printf("%s\n", value);
+                        if (c == 0x1b) // ESC
+                            quit = 1;
+                    }
 
-            dbus_message_unref(msg);
+                    usleep(1);
+                }
+
+                tcsetattr(STDIN_FILENO, TCSANOW, &o);
+
+                return 0;
+            }
+
+//            {
+//                DBusPendingCall *call;
+//                dbus_connection_send_with_reply(bus, msg, &call, -1);
+//                dbus_pending_call_block(call);
+//                dbus_pending_call_steal_reply(call);
+//                dbus_pending_call_unref(call);
+//                dbus_message_iter_init(msg, &args);
+
+//                char *value;
+//                dbus_message_iter_get_basic(&args, &value);
+//                printf("%s\n", value);
+//            }
+
+//            dbus_message_unref(msg);
 
 //            DBusConnection *bus = dbus_bus_get_private(DBUS_BUS_SESSION, &err);
 //            assert(bus);
@@ -235,24 +280,28 @@ int main(int argc, char *argv[])
 //            dbus_message_unref(msg);
         }
 
-//        struct termios o;
-//        tcgetattr(STDIN_FILENO, &o);
-//        struct termios n = o;
-//        n.c_lflag &= ~(ICANON | ECHO | ECHOCTL | ECHONL);
-//        n.c_cflag |= HUPCL;
-//        n.c_cc[VMIN] = 0;
-//        tcsetattr(STDIN_FILENO, TCSANOW, &n);
+//        {
+//            struct termios o;
+//            tcgetattr(STDIN_FILENO, &o);
+//            struct termios n = o;
+//            n.c_lflag &= ~(ICANON | ECHO | ECHOCTL | ECHONL);
+//            n.c_cflag |= HUPCL;
+//            n.c_cc[VMIN] = 0;
+//            tcsetattr(STDIN_FILENO, TCSANOW, &n);
 
-//        int c;
-//        while (!quit) {
-//            c = getchar();
-//            if (c != EOF)
-//                printf("0x%02x\n", c);
+//            int c;
+//            while (!quit) {
+//                c = getchar();
+//                if (c != EOF)
+//                    printf("0x%02x\n", c);
 
-//            usleep(1);
+//                usleep(1);
+//            }
+
+//            tcsetattr(STDIN_FILENO, TCSANOW, &o);
+
+//            return 0;
 //        }
-
-//        tcsetattr(STDIN_FILENO, TCSANOW, &o);
 
         return 0;
     }
