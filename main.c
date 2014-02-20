@@ -66,16 +66,26 @@ int main(int argc, char *argv[])
             DBusError err;
             dbus_error_init(&err);
 
-            DBusConnection *bus = dbus_bus_get_private(DBUS_BUS_SESSION, &err);
-            assert(bus);
+//            DBusConnection *bus = dbus_bus_get_private(DBUS_BUS_SESSION, &err);
+            DBusConnection *bus = dbus_bus_get(DBUS_BUS_SYSTEM, &err);
+            if (dbus_error_is_set(&err)) {
+                printf("%s\n", err.message);
+                dbus_error_free(&err);
+                assert(0);
+            }
 
-            dbus_connection_set_exit_on_disconnect(bus, FALSE);
+//            dbus_connection_set_exit_on_disconnect(bus, FALSE);
 
             int res = dbus_bus_request_name(bus,
                                             "org.formatique.MediaPlayer",
-                                            DBUS_NAME_FLAG_DO_NOT_QUEUE,
+                                            0,
                                             &err);
-            assert(res == DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER);
+            //assert(res == DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER);
+            if (dbus_error_is_set(&err)) {
+                printf("%s\n", err.message);
+                dbus_error_free(&err);
+                assert(0);
+            }
 
 //            dbus_bus_add_match(bus, "type='signal',interface='org.formatique.signal.Type'", &err);
 //            dbus_connection_flush(bus);
@@ -98,9 +108,14 @@ int main(int argc, char *argv[])
                         static const char *xml =
                             DBUS_INTROSPECT_1_0_XML_DOCTYPE_DECL_NODE
                             "<node>                                                     "
+                            "  <interface name=\"org.formatique.MediaPlayer\">			"
+                            "    <method name=\"Ping\">									"
+                            "      <arg direction=\"out\" type=\"s\" />					"
+                            "    </method>												"
+                            "  </interface>												"
                             "  <interface name=\"org.freedesktop.DBus.Introspectable\"> "
                             "    <method name=\"Introspect\">                           "
-                            "      <arg direction=\"out\" type=\"s\"/>                  "
+                            "      <arg direction=\"out\" type=\"s\" />					"
                             "    </method>                                              "
                             "  </interface>                                             "
                             "</node>                                                    ";
@@ -110,6 +125,21 @@ int main(int argc, char *argv[])
                         dbus_uint32_t serial = 0;
                         res = dbus_connection_send(bus, reply, &serial);
                         assert(res);
+
+                        dbus_connection_flush(bus);
+                        dbus_message_unref(reply);
+                    }
+                    else if (dbus_message_is_method_call(msg, "org.formatique.MediaPlayer", "Ping")) {
+                        DBusMessage *reply = dbus_message_new_method_return(msg);
+                        DBusMessageIter args;
+                        dbus_message_iter_init_append(reply, &args);
+                        static const char *value = "Ping()";
+                        dbus_message_iter_append_basic(&args, DBUS_TYPE_STRING, (const void *)&value);
+
+                        dbus_uint32_t serial = 0;
+                        dbus_connection_send(bus, reply, &serial);
+
+                        printf("Ping()\n");
 
                         dbus_connection_flush(bus);
                         dbus_message_unref(reply);
@@ -135,41 +165,74 @@ int main(int argc, char *argv[])
                 usleep(1);
             }
 
-            dbus_connection_close(bus);
+//            dbus_connection_close(bus);
             dbus_connection_unref(bus);
         }
         else if (strcmp(argv[1], "send") == 0) {
             DBusError err;
             dbus_error_init(&err);
 
-            DBusConnection *bus = dbus_bus_get_private(DBUS_BUS_SESSION, &err);
-            assert(bus);
+            DBusConnection *bus = dbus_bus_get(DBUS_BUS_SYSTEM, &err);
+            if (dbus_error_is_set(&err)) {
+                printf("%s\n", err.message);
+                dbus_error_free(&err);
+                assert(0);
+            }
 
-            dbus_connection_set_exit_on_disconnect(bus, FALSE);
+            DBusMessage *msg = dbus_message_new_method_call("org.formatique.MediaPlayer",
+                                                            "/org/formatique/MediaPlayer",
+                                                            "org.formatique.MediaPlayer",
+                                                            "Ping");
 
-            int res = dbus_bus_request_name(bus,
-                                            "org.formatique.source",
-                                            DBUS_NAME_FLAG_DO_NOT_QUEUE,
-                                            &err);
-            assert(res == DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER);
+            DBusMessageIter args;
+            dbus_message_iter_init_append(msg, &args);
 
-            DBusMessage *msg = dbus_message_new_signal("/org/formatique/signal/Object",
-                                                       "org.formatique.signal.Type",
-                                                       "QUIT");
-            assert(msg);
-
-            DBusMessageIter arg;
-            dbus_message_iter_init_append(msg, &arg);
-
-            char *value = "QUIT";
-            res = dbus_message_iter_append_basic(&arg, DBUS_TYPE_STRING, &value);
-            assert(res);
-
-            res = dbus_connection_send(bus, msg, NULL);
-            assert(res);
+            DBusPendingCall *call;
+            dbus_connection_send_with_reply(bus, msg, &call, -1);
 
             dbus_connection_flush(bus);
             dbus_message_unref(msg);
+
+            dbus_pending_call_block(call);
+            dbus_pending_call_steal_reply(call);
+            dbus_pending_call_unref(call);
+
+            dbus_message_iter_init(msg, &args);
+
+            char *value;
+            dbus_message_iter_get_basic(&args, &value);
+            printf("%s\n", value);
+
+            dbus_message_unref(msg);
+
+//            DBusConnection *bus = dbus_bus_get_private(DBUS_BUS_SESSION, &err);
+//            assert(bus);
+
+//            dbus_connection_set_exit_on_disconnect(bus, FALSE);
+
+//            int res = dbus_bus_request_name(bus,
+//                                            "org.formatique.source",
+//                                            DBUS_NAME_FLAG_DO_NOT_QUEUE,
+//                                            &err);
+//            assert(res == DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER);
+
+//            DBusMessage *msg = dbus_message_new_signal("/org/formatique/signal/Object",
+//                                                       "org.formatique.signal.Type",
+//                                                       "QUIT");
+//            assert(msg);
+
+//            DBusMessageIter arg;
+//            dbus_message_iter_init_append(msg, &arg);
+
+//            char *value = "QUIT";
+//            res = dbus_message_iter_append_basic(&arg, DBUS_TYPE_STRING, &value);
+//            assert(res);
+
+//            res = dbus_connection_send(bus, msg, NULL);
+//            assert(res);
+
+//            dbus_connection_flush(bus);
+//            dbus_message_unref(msg);
         }
 
 //        struct termios o;
